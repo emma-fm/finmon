@@ -100,10 +100,10 @@ FEEDBACK_REPLY = {
 }
 
 
-def keyboard(kind: str, notification_id: int) -> dict:
+def keyboard(kind: str, notification_id: int, extra_rows: list[list[dict]] | None = None) -> dict:
     buttons = BUTTONS.get(kind, BUTTONS["default"])
-    return {"inline_keyboard": [[{"text": label, "callback_data": f"fb:{notification_id}:{verdict}"}
-                                 for verdict, label in buttons]]}
+    rows = [[{"text": label, "callback_data": f"fb:{notification_id}:{verdict}"} for verdict, label in buttons]]
+    return {"inline_keyboard": (extra_rows or []) + rows}
 
 
 def record_feedback(conn: sqlite3.Connection, notification_id: int, verdict: str) -> str:

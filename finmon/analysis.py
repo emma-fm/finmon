@@ -44,7 +44,7 @@ def _local_now(settings: Settings) -> datetime:
 
 
 def notify(conn: sqlite3.Connection, settings: Settings, kind: str, text: str, dry_run: bool = False,
-           tx_ids: list[str] | None = None) -> None:
+           tx_ids: list[str] | None = None, extra_rows: list[list[dict]] | None = None) -> None:
     """Send a message with feedback buttons; the reactions are what the monitor learns from."""
     if dry_run:
         print(f"--- [{kind}] (dry run, not sent) ---\n{strip_html(text)}\n")
@@ -54,7 +54,7 @@ def notify(conn: sqlite3.Connection, settings: Settings, kind: str, text: str, d
                         json.dumps(tx_ids or [])))
     conn.commit()
     try:
-        message_id = telegram.send(settings, text, reply_markup=keyboard(kind, cur.lastrowid))
+        message_id = telegram.send(settings, text, reply_markup=keyboard(kind, cur.lastrowid, extra_rows))
     except Exception as e:  # keep the run going; the message stays in the notifications table
         log.error("could not send %s message to Telegram: %s", kind, e)
         debug.log(conn, f"⚠️ No se pudo enviar el mensaje '{kind}' por Telegram: {str(e)[:200]}")
@@ -71,6 +71,19 @@ def _fmt_tx(t) -> str:
 
 
 # --- 1. alerts on new unusual transactions ------------------------------------
+
+# Expenses that are often paid for a group: alerts about them get one-tap split buttons.
+SHAREABLE = {"eating_out", "leisure", "travel", "groceries", "gifts_donations", "shopping", "transport", "other"}
+
+
+def split_buttons(txs: list) -> list[list[dict]]:
+    """A row '✂️ ÷2 ÷3 ÷4 ÷5' per shareable expense (at most 2 rows); callback data 'sp:<ref>:<people>'."""
+    rows = []
+    shareable = [t for t in txs if t["amount"] < 0 and (t["category"] or "other") in SHAREABLE]
+    for t in shareable[:2]:
+        prefix = f"#{t['ref']} " if len(shareable) > 1 else ""
+        rows.append([{"text": f"✂️ {prefix}÷{n}", "callback_data": f"sp:{t['ref']}:{n}"} for n in (2, 3, 4, 5)])
+    return rows
 
 def check_new_transactions(conn: sqlite3.Connection, settings: Settings, dry_run: bool = False) -> int:
     new = conn.execute(
@@ -113,7 +126,7 @@ def check_new_transactions(conn: sqlite3.Connection, settings: Settings, dry_run
                 f"(#{t['ref']}): {esc(reason)}" for t, reason in flagged)}
         if reply.get("notify") and (reply.get("html") or (reply.get("message") or "").strip()):
             notify(conn, settings, "unusual_expense", reply.get("html") or llm_html(reply["message"]), dry_run,
-                   tx_ids=[t["id"] for t, _ in flagged])
+                   tx_ids=[t["id"] for t, _ in flagged], extra_rows=split_buttons([t for t, _ in flagged]))
             debug.log(conn, "→ Alerta enviada")
         else:
             log.info("flagged expenses judged normal for this person's habits: %s", lines)

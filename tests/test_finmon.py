@@ -406,3 +406,19 @@ def test_dates_given_to_llm_carry_weekday_labels(env):
     assert rows[0]["day"] == day(TODAY)
     assert stats.month_stats(conn, settings, TODAY)["today_label"] == day(TODAY)
     assert day("2026-11-09") == "lun 9 nov"
+
+
+def test_split_buttons_and_menu(env):
+    from finmon import bot
+    from finmon.analysis import split_buttons
+    settings, conn = env
+    dinner = add(conn, "d1", -80.0, "RESTAURANTE SOL")
+    rent = add(conn, "r1", -700.0, "RECIBO ALQUILER")
+    rows = split_buttons([dinner, rent])
+    assert len(rows) == 1  # rent isn't shareable
+    assert [b["callback_data"] for b in rows[0]] == [f"sp:{dinner['ref']}:{n}" for n in (2, 3, 4, 5)]
+    assert all(len(b["callback_data"].encode()) <= 64 for b in rows[0])  # Telegram limit
+    assert set(bot.MENU.values()) <= {"/status", "/recent", "/owed", "/habits", "/help"}
+    for label, command in bot.MENU.items():
+        assert bot.handle_command(conn, settings, command)
+    assert "Uso" in bot.handle_command(conn, settings, "/split")

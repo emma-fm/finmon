@@ -17,7 +17,7 @@ from .analysis import STATUS_ES, _compact_stats, _local_now, _system
 from .categorize import CATEGORIES, CATEGORY_ES, set_merchant_category
 from .config import Settings
 from .db import kv_get, kv_set
-from .fmt import bar, day, emoji, esc, eur, llm_html
+from .fmt import bar, day, emoji, esc, eur, llm_html, strip_html
 from .learning import add_user_note, forget_note, habits_context, mark_expected, notes, record_feedback, review_habits
 from .llm import LLMError, ask_json
 from .splits import IN_KINDS, KIND_ES, OUT_KINDS, close_split, link_transfer, open_splits, set_split, tx_by_ref
@@ -46,13 +46,39 @@ HELP = """🤖 <b>Qué puedo hacer</b>
 /learn — revisar tus hábitos ahora
 /debug on · /debug off — informe tras cada ejecución
 
-<b>Botones</b> en cada mensaje: <i>Es normal</i> deja de avisarte por ese comercio, \
-<i>Puntual</i> lo excluye de tus cifras habituales y 👍/👎 ajustan cuánto te escribo.
+<b>Botones</b>: el teclado de abajo tiene lo más usado, y las alertas de gastos que se suelen \
+compartir traen ✂️ ÷2 ÷3… para dividirlos de un toque. En cada mensaje: <i>Es normal</i> deja de \
+avisarte por ese comercio, <i>Puntual</i> lo excluye de tus cifras habituales y 👍/👎 ajustan cuánto te escribo.
 
 <b>O escríbeme normal</b>, p. ej.:
 • «la cena del viernes éramos 4»
 • «el #45 es Marta devolviéndome lo del concierto»
 • «¿cuánto he gastado en Glovo este mes?»"""
+
+
+# Persistent keyboard under the text box. Each button just sends its label, mapped to a command here.
+MENU = {
+    "📊 Estado": "/status", "🧾 Movimientos": "/recent", "🤝 Me deben": "/owed",
+    "🧠 Hábitos": "/habits", "❓ Ayuda": "/help",
+}
+MAIN_KEYBOARD = {
+    "keyboard": [[{"text": "📊 Estado"}, {"text": "🧾 Movimientos"}],
+                 [{"text": "🤝 Me deben"}, {"text": "🧠 Hábitos"}, {"text": "❓ Ayuda"}]],
+    "resize_keyboard": True,
+    "is_persistent": True,
+    "input_field_placeholder": "Pregúntame o cuéntame algo…",
+}
+
+# The "/" menu (commands that need no arguments; the rest are explained in /help).
+COMMANDS = [
+    ("status", "Cómo va el mes"),
+    ("recent", "Últimos movimientos"),
+    ("owed", "Lo que te deben"),
+    ("habits", "Lo que he aprendido de ti"),
+    ("learn", "Revisar tus hábitos ahora"),
+    ("debug", "Ver o cambiar el modo debug"),
+    ("help", "Todos los comandos"),
+]
 
 
 def _fmt(r: dict) -> str:
@@ -245,6 +271,13 @@ def handle_command(conn: sqlite3.Connection, settings: Settings, text: str) -> s
         return f"🧠 <b>Perfil actualizado</b>{found}\n\n<i>Míralo con /habits</i>"
     if cmd == "/cat" and len(args) >= 2:
         return do_action(conn, {"action": "category", "ref": args[0], "category": args[1]})
+    usage = {
+        "/split": "/split #ref 4  o  /split #ref share=12,50", "/settled": "/settled #ref",
+        "/link": "/link #bizum #gasto", "/kind": "/kind #ref share eating_out", "/cat": "/cat #ref groceries",
+        "/forget": "/forget n  (el número de la nota en /habits)",
+    }
+    if cmd in usage:
+        return f"✍️ Uso: <code>{esc(usage[cmd])}</code>"
     return "🤔 No he entendido ese comando.\n\n" + HELP
 
 
@@ -303,15 +336,30 @@ def _handle_button(conn: sqlite3.Connection, settings: Settings, cq: dict) -> No
     chat_id = str((message.get("chat") or {}).get("id"))
     if chat_id != str(settings.telegram_chat_id):
         return
+    data = cq.get("data", "")
+    prefix = data.split(":", 1)[0]
+    confirmation = None
     try:
-        _, notification_id, verdict = cq.get("data", "").split(":", 2)
-        reply = record_feedback(conn, int(notification_id), verdict)
-    except ValueError:
-        reply = "No he entendido ese botón."
+        if prefix == "fb":  # feedback: fb:<notification id>:<verdict>
+            _, notification_id, verdict = data.split(":", 2)
+            reply = record_feedback(conn, int(notification_id), verdict)
+        elif prefix == "sp":  # split: sp:<ref>:<people>
+            _, ref, people = data.split(":", 2)
+            confirmation = do_action(conn, {"action": "split", "ref": ref, "people": int(people)})
+            reply = strip_html(confirmation).replace("\n", " · ")
+        else:
+            raise ValueError(data)
+    except ValueError as e:
+        reply = "No he entendido ese botón." if prefix not in ("fb", "sp") else f"⚠️ {e}"
     try:
-        telegram.answer_callback(settings, cq["id"], reply)
-        telegram.remove_buttons(settings, chat_id, message["message_id"])
-    except Exception as e:  # cosmetic; the feedback is already stored
+        telegram.answer_callback(settings, cq["id"], reply[:190])
+        # Remove only the row group that was used (feedback or split); keep the others.
+        rows = (message.get("reply_markup") or {}).get("inline_keyboard", [])
+        remaining = [row for row in rows if not any(b.get("callback_data", "").startswith(prefix + ":") for b in row)]
+        telegram.set_buttons(settings, chat_id, message["message_id"], remaining)
+        if confirmation:
+            telegram.send(settings, confirmation, chat_id, reply_markup=MAIN_KEYBOARD)
+    except Exception as e:  # cosmetic; the action is already stored
         log.warning("could not acknowledge button: %s", e)
 
 
@@ -321,6 +369,10 @@ def run_bot(conn: sqlite3.Connection, settings: Settings) -> None:
     if not settings.telegram_chat_id:
         raise SystemExit("Set TELEGRAM_CHAT_ID first (see `finmon telegram-setup`).")
     offset = int(kv_get(conn, "tg_offset", "0") or 0) or None
+    try:
+        telegram.set_commands(settings, COMMANDS)
+    except Exception as e:  # cosmetic
+        log.warning("could not set the command menu: %s", e)
     log.info("bot started")
     while True:
         try:
@@ -346,6 +398,7 @@ def run_bot(conn: sqlite3.Connection, settings: Settings) -> None:
                 continue
             if not text:
                 continue
+            text = MENU.get(text, text)  # keyboard buttons send their label
             try:
                 answer = handle_command(conn, settings, text) if text.startswith("/") else \
                     handle_text(conn, settings, text)
@@ -354,4 +407,4 @@ def run_bot(conn: sqlite3.Connection, settings: Settings) -> None:
             except Exception:
                 log.exception("error handling message")
                 answer = "⚠️ Algo ha fallado, revisa los logs del servidor."
-            telegram.send(settings, answer, chat_id)
+            telegram.send(settings, answer, chat_id, reply_markup=MAIN_KEYBOARD)

@@ -80,8 +80,17 @@ def answer_callback(settings: Settings, callback_id: str, text: str) -> None:
 
 
 def remove_buttons(settings: Settings, chat_id: str | int, message_id: int) -> None:
+    set_buttons(settings, chat_id, message_id, [])
+
+
+def set_buttons(settings: Settings, chat_id: str | int, message_id: int, rows: list[list[dict]]) -> None:
     _api(settings, "editMessageReplyMarkup", chat_id=chat_id, message_id=message_id,
-         reply_markup={"inline_keyboard": []})
+         reply_markup={"inline_keyboard": rows})
+
+
+def set_commands(settings: Settings, commands: list[tuple[str, str]]) -> None:
+    """The menu Telegram shows when you tap "/" or the menu button."""
+    _api(settings, "setMyCommands", commands=[{"command": c, "description": d} for c, d in commands])
 
 
 def get_updates(settings: Settings, offset: int | None, timeout: int = 50) -> list[dict]:
