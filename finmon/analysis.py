@@ -11,7 +11,7 @@ from . import debug, telegram
 from .categorize import CATEGORIES, CATEGORY_ES, set_merchant_category
 from .config import Settings
 from .db import kv_get, kv_set
-from .fmt import FORMAT_RULES, esc, eur, llm_html, strip_html
+from .fmt import FORMAT_RULES, day, esc, eur, llm_html, strip_html
 from .learning import habits_context, keyboard, review_habits
 from .llm import LLMError, ask_json
 from .splits import classify_transfers
@@ -67,7 +67,7 @@ def _fmt_tx(t) -> str:
     who = t["counterparty"] or t["description"] or t["merchant"]
     pending = " (pending)" if t["status"] == "PDNG" else ""
     return (f"#{t['ref']} {-t['amount']:.2f} € — {who[:60]} [{t['category'] or 'uncategorized'}] "
-            f"on {t['booking_date']}{pending}")
+            f"on {day(t['booking_date'])} ({t['booking_date']}){pending}")
 
 
 # --- 1. alerts on new unusual transactions ------------------------------------

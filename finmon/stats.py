@@ -11,6 +11,7 @@ import statistics
 from datetime import date, timedelta
 
 from .config import Settings
+from .fmt import day
 from .splits import open_splits
 
 
@@ -154,6 +155,7 @@ def month_stats(conn: sqlite3.Connection, settings: Settings, today: date, basel
 
     return {
         "today": today.isoformat(),
+        "today_label": day(today),
         "day_of_month": today.day,
         "days_in_month": days_in_month,
         "spent_this_month": round(mtd_total, 2),
@@ -171,7 +173,8 @@ def month_stats(conn: sqlite3.Connection, settings: Settings, today: date, basel
         "same_month_last_year": _same_month_last_year(conn, settings, start, first_date),
         "balance": latest_balance(conn),
         "owed_to_you": [
-            {"ref": o["ref"], "date": o["booking_date"], "what": o["counterparty"] or o["merchant"],
+            {"ref": o["ref"], "date": o["booking_date"], "day": day(o["booking_date"]),
+             "what": o["counterparty"] or o["merchant"],
              "paid": o["gross"], "my_share": o["my_share"], "received": o["reimbursed"], "still_owed": o["owed"],
              "days_ago": o["days_ago"]}
             for o in open_splits(conn)
@@ -287,7 +290,12 @@ def recent_transactions(conn: sqlite3.Connection, since: date, limit: int = 200)
            WHERE t.booking_date >= ? ORDER BY t.booking_date DESC LIMIT ?""",
         (since.isoformat(), limit),
     ).fetchall()
-    return [{k: v for k, v in dict(r).items() if v is not None} for r in rows]
+    out = []
+    for r in rows:
+        d = {k: v for k, v in dict(r).items() if v is not None}
+        d["day"] = day(r["booking_date"])  # weekday computed here: LLMs get weekdays wrong
+        out.append(d)
+    return out
 
 
 def recurring_charges(conn: sqlite3.Connection, today: date) -> list[dict]:

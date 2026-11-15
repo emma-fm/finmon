@@ -396,3 +396,13 @@ def test_telegram_chunks_keep_paragraphs():
     chunks = _chunks(text, limit=3800)
     assert len(chunks) > 1 and all(len(c) <= 3800 for c in chunks)
     assert all(c.count("<b>") == c.count("</b>") for c in chunks)
+
+
+def test_dates_given_to_llm_carry_weekday_labels(env):
+    settings, conn = env
+    add(conn, "w1", -10.0, "MERCADONA", days_ago=0)
+    rows = stats.recent_transactions(conn, TODAY - timedelta(days=1))
+    from finmon.fmt import day
+    assert rows[0]["day"] == day(TODAY)
+    assert stats.month_stats(conn, settings, TODAY)["today_label"] == day(TODAY)
+    assert day("2026-11-09") == "lun 9 nov"

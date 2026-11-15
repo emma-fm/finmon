@@ -165,7 +165,7 @@ def _candidate_expenses(conn: sqlite3.Connection, settings: Settings, transfers:
             ORDER BY t.booking_date DESC LIMIT 80""",
         (since, *fixed),
     ).fetchall()
-    return [dict(r) for r in rows]
+    return [{**dict(r), "day": day(r["booking_date"])} for r in rows]
 
 
 # --- LLM classification -----------------------------------------------------------------
@@ -183,7 +183,7 @@ def classify_transfers(conn: sqlite3.Connection, settings: Settings, dry_run: bo
         return []
     candidates = _candidate_expenses(conn, settings, transfers)
     t_json = [
-        {"ref": t["ref"], "date": t["booking_date"], "amount": t["amount"],
+        {"ref": t["ref"], "date": t["booking_date"], "day": day(t["booking_date"]), "amount": t["amount"],
          "direction": "in" if t["amount"] > 0 else "out",
          "person": t["counterparty"], "concept": t["description"]}
         for t in transfers

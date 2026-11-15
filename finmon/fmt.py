@@ -78,4 +78,6 @@ def strip_html(text: str) -> str:
 FORMAT_RULES = """Formatting (Telegram HTML): put a short headline on the first line in <b>bold</b>; use <b>…</b> \
 for the 1-3 most important figures and <i>…</i> sparingly; separate ideas with a blank line; use "• " for \
 lists. No Markdown, no other tags, no tables. Write amounts the Spanish way: 1.234,56 € (or 1.234 € for round \
-figures) and dates like "sáb 15 nov"."""
+figures). Dates: every date in the data comes with a ready-made Spanish label (fields "day" / "today_label", \
+e.g. "lun 9 nov"); copy those labels exactly and never work out a weekday yourself. If a date has no label, \
+write it without the weekday ("9 nov")."""
