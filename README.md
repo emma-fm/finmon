@@ -25,7 +25,7 @@ Bank ──PSD2──▶ Enable Banking ──▶ finmon (4×/day) ──▶ SQL
 
 | When | What |
 |---|---|
-| Every run (08:00, 13:00, 18:00, 21:30) | New transactions are categorised, new Bizums interpreted, and unusual expenses alerted: large for you in that category, much more than usual at that merchant, or a big first purchase somewhere new. |
+| Every run (08:30, 13:30, 18:30, 21:30) | New transactions are categorised, new Bizums interpreted, and unusual expenses alerted: large for you in that category, much more than usual at that merchant, or a big first purchase somewhere new. |
 | Evening, daily | The LLM decides whether something is worth telling you: over pace, a category running hot, a new recurring charge, encouragement when earned, or money still owed to you. Otherwise it stays quiet. |
 | Sunday evening | Weekly summary, plus what it learned about your habits. |
 | 1st of the month | Recap of the previous month. |
