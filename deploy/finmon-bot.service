@@ -1,0 +1,14 @@
+[Unit]
+Description=finmon Telegram bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=@PROJECT_DIR@
+ExecStart=@PROJECT_DIR@/.venv/bin/python -m finmon bot
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=default.target

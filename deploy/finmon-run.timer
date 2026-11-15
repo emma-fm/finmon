@@ -1,0 +1,10 @@
+[Unit]
+Description=finmon: run 4 times a day (PSD2 allows ~4 unattended bank reads per day)
+
+[Timer]
+OnCalendar=*-*-* 08,13,18,21:30:00 Europe/Madrid
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target
