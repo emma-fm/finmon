@@ -343,7 +343,7 @@ def test_debug_mode_collects_and_expires(env, capsys):
     add(conn, "dbg1", -12.5, "MERCADONA")          # store_transactions logs new transactions
     debug.flush(conn, settings, "test", dry_run=True)
     out = capsys.readouterr().out
-    assert "DEBUG" in out and "MERCADONA" in out and "ignored" not in out
+    assert "Debug" in out and "MERCADONA" in out and "ignored" not in out
     from finmon.db import kv_set
     kv_set(conn, "debug_until", "2000-01-01T00:00:00+00:00")  # expired
     debug.log(conn, "after expiry")
@@ -366,3 +366,33 @@ def test_spanish_bank_formats():
     assert rule_category("cargo cuota de prestamo", "Cargo cuota de préstamo", -250.0) == "loans"
     assert rule_category(normalise_merchant(None, "Pago en VET SOL MADRID ES"), None, -120) == "pets"
     assert rule_category("traspaso interno emitido", "Traspaso interno emitido", -120) == "internal_transfer"
+
+
+# --- message formatting ---------------------------------------------------------------------------
+
+def test_spanish_formats():
+    from datetime import date as _d
+
+    from finmon.fmt import bar, day, eur
+    assert eur(1413.16) == "1.413,16 €"
+    assert eur(-7.5) == "−7,50 €"
+    assert eur(24, sign=True) == "+24,00 €"
+    assert eur(1779.46, 0) == "1.779 €"
+    assert day("2026-11-15") == "dom 15 nov" and day(_d(2026, 8, 1)) == "sáb 1 ago"
+    assert bar(0.5, 10) == "▓▓▓▓▓░░░░░" and bar(1.4, 4) == "▓▓▓▓"
+
+
+def test_llm_html_is_sanitised():
+    from finmon.fmt import llm_html, strip_html
+    out = llm_html("**Ojo** con <script>x</script> & <b>Glovo</b>\n- uno\n## Título")
+    assert out.startswith("<b>Ojo</b>") and "&lt;script&gt;" in out and "&amp;" in out
+    assert "<b>Glovo</b>" in out and "• uno" in out and "<b>Título</b>" in out
+    assert strip_html("<b>A &amp; B</b>") == "A & B"
+
+
+def test_telegram_chunks_keep_paragraphs():
+    from finmon.telegram import _chunks
+    text = "\n\n".join(f"<b>p{i}</b> " + "x" * 900 for i in range(10))
+    chunks = _chunks(text, limit=3800)
+    assert len(chunks) > 1 and all(len(c) <= 3800 for c in chunks)
+    assert all(c.count("<b>") == c.count("</b>") for c in chunks)

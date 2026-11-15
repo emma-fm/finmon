@@ -17,6 +17,7 @@ from .analysis import STATUS_ES, _compact_stats, _local_now, _system
 from .categorize import CATEGORIES, CATEGORY_ES, set_merchant_category
 from .config import Settings
 from .db import kv_get, kv_set
+from .fmt import bar, day, emoji, esc, eur, llm_html
 from .learning import add_user_note, forget_note, habits_context, mark_expected, notes, record_feedback, review_habits
 from .llm import LLMError, ask_json
 from .splits import IN_KINDS, KIND_ES, OUT_KINDS, close_split, link_transfer, open_splits, set_split, tx_by_ref
@@ -24,40 +25,118 @@ from .stats import month_stats, recent_transactions
 
 log = logging.getLogger(__name__)
 
-HELP = """Comandos:
+HELP = """🤖 <b>Qué puedo hacer</b>
+
+<b>Ver</b>
 /status — cómo va el mes
 /recent — últimos movimientos con su #ref
-/owed — gastos compartidos que aún no te han devuelto del todo
-/split #ref <personas> — pagué por <personas> (incluyéndome); espero Bizums de vuelta
-/split #ref share=<€> — lo mismo, indicando mi parte en euros
-/settled #ref — dejar de esperar más dinero de vuelta por #ref
-/link #bizum #gasto — este Bizum recibido devuelve ese gasto
-/kind #bizum <tipo> [categoría] — p. ej. /kind #31 share eating_out, /kind #32 loan_out
-/cat #ref <categoría> — cambiar la categoría de ese comercio
+/owed — lo que te deben de gastos compartidos
 /habits — lo que he aprendido de tus hábitos
-/forget <n> — olvidar la nota n de /habits
-/learn — revisar ahora tus hábitos con todo el historial
-/debug on [días] — enviarte un informe de todo lo que proceso en cada ejecución (por defecto 21 días)
-/debug off — desactivarlo · /debug — ver su estado
 
-Los botones de cada mensaje me enseñan: «Es normal» deja de avisarte por ese comercio, \
-«Puntual» excluye el gasto de tus cifras habituales y 👍/👎 ajustan cuánto te escribo.
+<b>Gastos compartidos</b>
+/split #ref 4 — pagaste para 4 (contándote)
+/split #ref share=12,50 — o indicando tu parte
+/settled #ref — no esperar más devoluciones
+/link #bizum #gasto — ese Bizum devuelve ese gasto
+/kind #bizum share eating_out — reinterpretar un Bizum
 
-O simplemente escríbeme, p. ej. “la cena del viernes éramos 4”, \
-“el #45 es Marta devolviéndome lo del concierto”, “recuerda que en diciembre gasto más en regalos”, \
-“¿cuánto he gastado en Glovo este mes?”"""
+<b>Ajustes</b>
+/cat #ref groceries — cambiar la categoría de un comercio
+/forget n — olvidar la nota n de /habits
+/learn — revisar tus hábitos ahora
+/debug on · /debug off — informe tras cada ejecución
+
+<b>Botones</b> en cada mensaje: <i>Es normal</i> deja de avisarte por ese comercio, \
+<i>Puntual</i> lo excluye de tus cifras habituales y 👍/👎 ajustan cuánto te escribo.
+
+<b>O escríbeme normal</b>, p. ej.:
+• «la cena del viernes éramos 4»
+• «el #45 es Marta devolviéndome lo del concierto»
+• «¿cuánto he gastado en Glovo este mes?»"""
 
 
 def _fmt(r: dict) -> str:
-    who = r.get("counterparty") or r.get("description") or ""
+    """One transaction line for /recent (the day is shown as a heading)."""
+    who = (r.get("counterparty") or r.get("description") or "").strip()
     extra = ""
     if r.get("bizum_kind"):
-        extra = f" · bizum: {KIND_ES.get(r['bizum_kind'], r['bizum_kind'])}"
-        if r.get("reimburses_ref"):
-            extra += f" de #{r['reimburses_ref']}"
+        extra = f" · <i>{esc(KIND_ES.get(r['bizum_kind'], r['bizum_kind']))}"
+        extra += f" de #{r['reimburses_ref']}</i>" if r.get("reimburses_ref") else "</i>"
     if r.get("split_my_share") is not None:
-        extra += f" · compartido, mi parte {r['split_my_share']:.2f} €"
-    return f"#{r['ref']} {r['booking_date']} {r['amount']:+.2f} € {who[:40]} [{r.get('category', '?')}]{extra}"
+        extra += f" · <i>tu parte {eur(r['split_my_share'])}</i>"
+    amount = f"<b>{eur(r['amount'], sign=True)}</b>" if r["amount"] > 0 else eur(r["amount"])
+    return f"{emoji(r.get('category'))} {amount}  {esc(who[:32])} <code>#{r['ref']}</code>{extra}"
+
+
+def _recent(conn: sqlite3.Connection, settings: Settings) -> str:
+    since = _local_now(settings).date() - timedelta(days=14)
+    rows = recent_transactions(conn, since, 30)
+    if not rows:
+        return "No hay movimientos en las últimas dos semanas."
+    out, current = ["🧾 <b>Últimos movimientos</b>"], None
+    for r in rows:
+        if r["booking_date"] != current:
+            current = r["booking_date"]
+            out.append(f"\n<b>{day(current)}</b>")
+        out.append(_fmt(r))
+    return "\n".join(out)
+
+
+def _status(conn: sqlite3.Connection, settings: Settings) -> str:
+    s = month_stats(conn, settings, _local_now(settings).date())
+    ref = s["monthly_budget"] or s["usual_month_total"]
+    icon = {"good": "🟢", "on_track": "🟢", "watch": "🟡", "overspending": "🔴"}.get(s["status"], "⚪")
+    out = [f"{icon} <b>Este mes: {eur(s['spent_this_month'], 0)}</b>  ·  día {s['day_of_month']}/{s['days_in_month']}"]
+    if ref:
+        out += ["", f"<code>{bar(s['projected_month_total'] / ref)}</code> {s['projection_vs_reference']:.0%}",
+                f"Previsión {eur(s['projected_month_total'], 0)} · "
+                f"{'presupuesto' if s['monthly_budget'] else 'habitual'} {eur(ref, 0)}",
+                f"<i>Estado: {STATUS_ES[s['status']]}</i>"]
+    if s["usual_spent_by_this_day"] is not None:
+        diff = s["spent_this_month"] - s["usual_spent_by_this_day"]
+        out.append(f"<i>{eur(abs(diff), 0)} {'más' if diff > 0 else 'menos'} que lo habitual a estas alturas</i>")
+    out += ["", "<b>Por categoría</b> <i>(este mes · habitual al mes)</i>"]
+    for k, v in list(s["category_vs_usual"].items())[:8]:
+        hot = " ⚠️" if v["usual_full_month"] and v["this_month"] > v["usual_full_month"] else ""
+        out.append(f"{emoji(k)} {esc(CATEGORY_ES.get(k, k))}: <b>{eur(v['this_month'], 0)}</b> · "
+                   f"{eur(v['usual_full_month'], 0)}{hot}")
+    extras = []
+    if s["balance"] is not None:
+        extras.append(f"🏦 Saldo: {eur(s['balance'])}")
+    owed = sum(o["still_owed"] for o in s["owed_to_you"])
+    if owed:
+        extras.append(f"🤝 Te deben: {eur(owed)} (/owed)")
+    return "\n".join(out + ([""] + extras if extras else []))
+
+
+def _owed(conn: sqlite3.Connection) -> str:
+    rows = open_splits(conn)
+    if not rows:
+        return "🤝 Nadie te debe nada 🎉"
+    total = sum(o["owed"] for o in rows)
+    out = [f"🤝 <b>Te deben {eur(total)}</b>"]
+    for o in rows:
+        who = esc(o["counterparty"] or o["merchant"])
+        late = f" <i>(hace {o['days_ago']} días)</i>" if o["days_ago"] >= 7 else ""
+        out += ["", f"<b>{who}</b> <code>#{o['ref']}</code> · {day(o['booking_date'])}",
+                f"Pagaste {eur(o['gross'])} · tu parte {eur(o['my_share'])} · recibido {eur(o['reimbursed'])}",
+                f"➡️ <b>faltan {eur(o['owed'])}</b>{late}"]
+    return "\n".join(out)
+
+
+def _habits(conn: sqlite3.Connection) -> str:
+    rows = notes(conn)
+    if not rows:
+        return "🧠 Aún no he aprendido nada: necesito algo más de historial (lo reviso cada domingo)."
+    learned = [r for r in rows if r["source"] == "learned"]
+    told = [r for r in rows if r["source"] == "user"]
+    out = ["🧠 <b>Lo que sé de tus hábitos</b>"]
+    if told:
+        out += ["", "<b>Me lo dijiste tú</b>"] + [f"<code>{r['id']}</code> {esc(r['text'])}" for r in told]
+    if learned:
+        out += ["", "<b>Lo he aprendido</b>"] + [f"<code>{r['id']}</code> {esc(r['text'])}" for r in learned]
+    out += ["", "<i>Olvida una nota con /forget n</i>"]
+    return "\n".join(out)
 
 
 # --- actions shared by commands and natural language ------------------------------------
@@ -74,30 +153,34 @@ def do_action(conn: sqlite3.Connection, a: dict) -> str:
     if kind == "split":
         tx = _need(conn, a.get("ref"))
         share = set_split(conn, tx, people=a.get("people"), my_share=a.get("my_share"), note=a.get("note"))
-        return f"✂️ #{tx['ref']} compartido: tu parte es {share:.2f} € de {-tx['amount']:.2f} €"
+        return f"✂️ <b>#{tx['ref']} compartido</b>\nTu parte: <b>{eur(share)}</b> de {eur(-tx['amount'])}"
     if kind == "settled":
         tx = _need(conn, a.get("ref"))
         close_split(conn, tx["id"])
-        return f"✅ #{tx['ref']} cerrado: ya no espero más devoluciones"
+        return f"✅ <b>#{tx['ref']} cerrado</b>: ya no espero más devoluciones"
     if kind == "link":
         transfer, expense = _need(conn, a.get("transfer_ref")), _need(conn, a.get("expense_ref"))
         link_transfer(conn, transfer, "reimbursement", expense["id"], note=a.get("note"))
-        return f"🔗 #{transfer['ref']} ({transfer['amount']:+.2f} €) ahora cuenta como devolución de #{expense['ref']}"
+        return (f"🔗 <b>#{transfer['ref']}</b> ({eur(transfer['amount'], sign=True)}) ahora cuenta como "
+                f"devolución de <b>#{expense['ref']}</b>")
     if kind == "kind":
         transfer = _need(conn, a.get("ref"))
         link_transfer(conn, transfer, a.get("kind"), category=a.get("category"), note=a.get("note"))
         label = KIND_ES.get(a.get("kind"), a.get("kind"))
-        return f"🏷️ #{transfer['ref']} marcado como {label}" + (f" ({a['category']})" if a.get("category") else "")
+        cat = f" ({esc(CATEGORY_ES.get(a['category'], a['category']))})" if a.get("category") else ""
+        return f"🏷️ <b>#{transfer['ref']}</b> marcado como <b>{esc(label)}</b>{cat}"
     if kind == "category":
         tx = _need(conn, a.get("ref"))
         if a.get("category") not in CATEGORIES:
             raise ValueError(f"categoría desconocida; usa una de: {', '.join(CATEGORIES)}")
         set_merchant_category(conn, tx["merchant"], a["category"], "user")
         conn.commit()
-        return f"🏷️ '{tx['merchant']}' → {a['category']} (se aplica a todos sus movimientos)"
+        label = esc(CATEGORY_ES.get(a["category"], a["category"]))
+        return (f"🏷️ <b>{esc(tx['merchant'])}</b> → {emoji(a['category'])} {label}"
+                "\n<i>Se aplica a todos sus movimientos.</i>")
     if kind == "remember":
         note_id = add_user_note(conn, str(a.get("text", "")))
-        return f"🧠 Lo recordaré (nota {note_id})."
+        return f"🧠 <b>Lo recordaré</b> (nota {note_id})."
     if kind == "forget":
         if not forget_note(conn, int(a.get("note_id", 0))):
             raise ValueError("no existe esa nota")
@@ -106,12 +189,12 @@ def do_action(conn: sqlite3.Connection, a: dict) -> str:
         tx = _need(conn, a.get("ref"))
         conn.execute("UPDATE transactions SET one_off = 1 WHERE id = ?", (tx["id"],))
         conn.commit()
-        return f"1️⃣ #{tx['ref']} marcado como puntual: no contará para lo habitual."
+        return f"1️⃣ <b>#{tx['ref']} es puntual</b>: no contará para tus cifras habituales."
     if kind == "normal":
         tx = _need(conn, a.get("ref"))
         mark_expected(conn, tx["merchant"], -tx["amount"])
         conn.commit()
-        return f"🙂 '{tx['merchant']}' es normal para ti: no te avisaré por gastos así."
+        return f"🙂 <b>{esc(tx['merchant'])}</b> es normal para ti: no te avisaré por gastos así."
     raise ValueError(f"acción desconocida {kind!r}")
 
 
@@ -123,32 +206,11 @@ def handle_command(conn: sqlite3.Connection, settings: Settings, text: str) -> s
     if cmd in ("/start", "/help"):
         return HELP
     if cmd == "/status":
-        s = month_stats(conn, settings, _local_now(settings).date())
-        ref = s["monthly_budget"] or s["usual_month_total"]
-        lines = [
-            f"📊 Llevas {s['spent_this_month']:.2f} € gastados este mes (día {s['day_of_month']}/{s['days_in_month']})",
-            f"Previsión: {s['projected_month_total']:.0f} €" + (f" frente a {ref:.0f} € de referencia" if ref else ""),
-            f"Estado: {STATUS_ES[s['status']]}",
-        ]
-        if s["balance"] is not None:
-            lines.append(f"Saldo: {s['balance']:.2f} €")
-        lines += [f"  {CATEGORY_ES.get(k, k)}: {v['this_month']:.0f} € (habitual {v['usual_full_month']:.0f})"
-                  for k, v in list(s["category_vs_usual"].items())[:8]]
-        owed = sum(o["still_owed"] for o in s["owed_to_you"])
-        if owed:
-            lines.append(f"Te deben: {owed:.2f} € (/owed)")
-        return "\n".join(lines)
+        return _status(conn, settings)
     if cmd == "/recent":
-        since = _local_now(settings).date() - timedelta(days=14)
-        return "\n".join(_fmt(r) for r in recent_transactions(conn, since, 25)) or "No hay movimientos."
+        return _recent(conn, settings)
     if cmd == "/owed":
-        rows = open_splits(conn)
-        if not rows:
-            return "Nadie te debe nada 🎉"
-        return "\n".join(
-            f"#{o['ref']} {o['booking_date']} {o['counterparty'] or o['merchant']}: pagaste {o['gross']:.2f}, "
-            f"tu parte {o['my_share']:.2f}, recibido {o['reimbursed']:.2f} → te deben {o['owed']:.2f} €"
-            for o in rows)
+        return _owed(conn)
     if cmd == "/split" and len(args) >= 2:
         a = {"action": "split", "ref": args[0]}
         if args[1].startswith("share="):
@@ -169,25 +231,21 @@ def handle_command(conn: sqlite3.Connection, settings: Settings, text: str) -> s
             days = int(args[1]) if len(args) > 1 and args[1].isdigit() else debug.DEFAULT_DAYS
             debug.enable(conn, days)
             return (debug.status_text(conn, settings)
-                    + "\nRecibirás un informe tras cada ejecución (4 al día) con todo lo procesado.")
+                    + "\nRecibirás un informe tras cada ejecución (4 al día).")
         if args and args[0].lower() in ("off", "no"):
             debug.disable(conn)
         return debug.status_text(conn, settings)
     if cmd == "/habits":
-        rows = notes(conn)
-        if not rows:
-            return "Aún no he aprendido nada: necesito algo más de historial (lo reviso cada domingo)."
-        return "🧠 Lo que sé de tus hábitos:\n" + "\n".join(
-            f"{r['id']}. {r['text']}" + (" (me lo dijiste tú)" if r["source"] == "user" else "") for r in rows)
+        return _habits(conn)
     if cmd == "/forget" and args:
         return do_action(conn, {"action": "forget", "note_id": args[0]})
     if cmd == "/learn":
         insights = review_habits(conn, settings)
-        return ("🧠 Perfil actualizado." + ("\n" + "\n".join(f"• {i}" for i in insights) if insights else "")
-                + "\nMíralo con /habits")
+        found = "\n\n" + "\n".join(f"• {esc(i)}" for i in insights) if insights else ""
+        return f"🧠 <b>Perfil actualizado</b>{found}\n\n<i>Míralo con /habits</i>"
     if cmd == "/cat" and len(args) >= 2:
         return do_action(conn, {"action": "category", "ref": args[0], "category": args[1]})
-    return "No he entendido ese comando.\n\n" + HELP
+    return "🤔 No he entendido ese comando.\n\n" + HELP
 
 
 # --- free text -----------------------------------------------------------------------------------
@@ -226,15 +284,16 @@ This month's statistics (JSON):
 Transactions of the last 60 days (JSON):
 {json.dumps(recent_transactions(conn, today - timedelta(days=60), 400), ensure_ascii=False)}
 
-Reply with ONLY a JSON object: {{"reply": "<your answer, plain text>", "actions": [...]}}"""
+Reply with ONLY a JSON object: {{"reply": "<your answer, formatted as described in the system prompt>", \
+"actions": [...]}}"""
     reply = ask_json(settings, prompt, _system(settings))
     results = []
     for a in reply.get("actions") or []:
         try:
             results.append(do_action(conn, a))
         except (ValueError, TypeError) as e:
-            results.append(f"⚠️ no he podido hacer {a.get('action')}: {e}")
-    return "\n".join(filter(None, [reply.get("reply", "").strip(), *results])) or "👍"
+            results.append(f"⚠️ No he podido hacer <i>{esc(a.get('action'))}</i>: {esc(e)}")
+    return "\n\n".join(filter(None, [llm_html(reply.get("reply", "")), "\n".join(results)])) or "👍"
 
 
 # --- feedback buttons -------------------------------------------------------------------------------
@@ -291,7 +350,7 @@ def run_bot(conn: sqlite3.Connection, settings: Settings) -> None:
                 answer = handle_command(conn, settings, text) if text.startswith("/") else \
                     handle_text(conn, settings, text)
             except (ValueError, LLMError) as e:
-                answer = f"⚠️ {e}"
+                answer = f"⚠️ {esc(e)}"
             except Exception:
                 log.exception("error handling message")
                 answer = "⚠️ Algo ha fallado, revisa los logs del servidor."

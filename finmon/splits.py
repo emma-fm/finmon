@@ -31,6 +31,7 @@ from datetime import date, datetime, timedelta, timezone
 from . import debug
 from .categorize import CATEGORIES, CATEGORY_ES, is_person_transfer
 from .config import Settings
+from .fmt import day, eur
 from .llm import LLMError, ask_json
 
 log = logging.getLogger(__name__)
@@ -246,10 +247,10 @@ JSON format:
         expense_ref = item.get("expense_ref")
         expense = tx_by_ref(conn, expense_ref) if expense_ref in valid_expense_refs else None
         kind = item.get("kind")
-        line = (f"#{t['ref']} {t['amount']:+.2f} € {t['counterparty'] or ''} “{(t['description'] or '')[:40]}” "
-                f"→ {KIND_ES.get(kind, kind)}")
+        who = (t["counterparty"] or t["description"] or "").title()
+        line = f"#{t['ref']} {day(t['booking_date'])} · {eur(t['amount'], sign=True)} {who} → {KIND_ES.get(kind, kind)}"
         if expense:
-            line += f" de #{expense_ref} {expense['counterparty'] or expense['merchant']}"
+            line += f" de #{expense_ref} ({expense['counterparty'] or expense['merchant']}, {eur(-expense['amount'])})"
         if item.get("category"):
             line += f" ({CATEGORY_ES.get(item['category'], item['category'])})"
         confidence = {"high": "alta", "low": "baja"}.get(item.get("confidence"), item.get("confidence"))

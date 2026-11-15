@@ -9,10 +9,11 @@ import sqlite3
 from datetime import date, datetime, timedelta, timezone
 
 from . import debug
-from .categorize import categorise, normalise_merchant
+from .categorize import CATEGORY_ES, categorise, normalise_merchant
 from .config import Settings
 from .db import kv_get, kv_set
 from .enablebanking import EnableBanking
+from .fmt import day, emoji, eur
 
 log = logging.getLogger(__name__)
 
@@ -130,10 +131,11 @@ def store_transactions(conn: sqlite3.Connection, txs: list[dict], source: str, m
         new += 1
         if source != "csv":
             who = t.get("counterparty") or t.get("description") or t["merchant"]
-            debug.log(conn, f"+ #{cur.lastrowid} {t['booking_date']} {t['amount']:+.2f} € {who[:45]} "
-                            f"→ {category or 'sin categoría (lo decidirá el LLM)'}"
-                            + (" [pendiente]" if t["status"] == "PDNG" else "")
-                            + (" [ya avisado como pendiente]" if processed and not mark_processed else ""))
+            label = f"{emoji(category)} {CATEGORY_ES.get(category, category)}" if category else "❔ sin categoría"
+            debug.log(conn, f"#{cur.lastrowid} {day(t['booking_date'])} · {eur(t['amount'], sign=True)} "
+                            f"{who[:40]} → {label}"
+                            + (" (pendiente)" if t["status"] == "PDNG" else "")
+                            + (" (ya avisado como pendiente)" if processed and not mark_processed else ""))
     conn.commit()
     return new
 
@@ -173,8 +175,7 @@ def sync(conn: sqlite3.Connection, settings: Settings) -> int:
                 (uid, date.today().isoformat(), float(amt["amount"]), amt.get("currency", "EUR"),
                  b.get("balance_type") or ""),
             )
-            debug.log(conn, f"Saldo {b.get('balance_type') or '?'}: "
-                            f"{float(amt['amount']):.2f} {amt.get('currency', 'EUR')}")
+            debug.log(conn, f"Saldo ({b.get('balance_type') or '?'}): {eur(float(amt['amount']))}")
 
         fetched = [normalise_eb_transaction(tx, uid) for tx in eb.transactions(uid, date_from)]
         fetched = [t for t in fetched if t["booking_date"]]

@@ -107,11 +107,11 @@ def main(argv: list[str] | None = None) -> None:
             analysis.run_scheduled(conn, settings, dry_run=args.dry_run)
         finally:
             u = llm.usage
-            debug.section(conn, "Resumen de la ejecución")
-            debug.log(conn, ("Movimientos nuevos: " + (str(new) if new is not None else "—"))
-                            + f" · LLM {settings.llm_provider}/{settings.llm_model or 'por defecto'}: "
-                            f"{u['calls']} llamadas, {u['errors']} errores, {u['seconds']:.0f}s"
-                            f" · total {time.monotonic() - started:.0f}s")
+            debug.section(conn, debug.SUMMARY)
+            debug.log(conn, "Movimientos nuevos: " + (str(new) if new is not None else "— (sin sincronizar)"))
+            debug.log(conn, f"LLM {settings.llm_provider}/{settings.llm_model or 'por defecto'}: "
+                            f"{u['calls']} llamadas, {u['errors']} errores, {u['seconds']:.0f} s")
+            debug.log(conn, f"Duración total: {time.monotonic() - started:.0f} s")
             now = datetime.now(settings.timezone)
             debug.flush(conn, settings, f"ejecución {now:%d/%m %H:%M}", dry_run=args.dry_run)
 
